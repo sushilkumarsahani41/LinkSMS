@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+  match /users/{uid}/devices/{deviceId} {
+   allow read, delete: if owner(uid);
+   allow create, update: if owner(uid)
+     && request.resource.data.keys().hasOnly(['name','enabled','lastSeen'])
+     && request.resource.data.name is string && request.resource.data.name.size() <= 80
+     && request.resource.data.enabled is bool
+     && request.resource.data.lastSeen is timestamp && request.resource.data.lastSeen <= request.time;
+  }
+  match /users/{uid}/messages/{messageId} {
+   allow read, delete: if owner(uid);
+   allow create: if owner(uid)
+     && request.resource.data.keys().hasOnly(['deviceId','iv','ciphertext','version','receivedAt','uploadedAt'])
+     && request.resource.data.deviceId is string
+     && get(/databases/$(database)/documents/users/$(uid)/devices/$(request.resource.data.deviceId)).data.enabled == true
+     && request.resource.data.iv is string && request.resource.data.iv.size() == 16
+     && request.resource.data.ciphertext is string && request.resource.data.ciphertext.size() <= 100000
+     && request.resource.data.version == 1
+     && request.resource.data.receivedAt is int
+     && request.resource.data.uploadedAt == request.time;
+  }
+ }
+}
