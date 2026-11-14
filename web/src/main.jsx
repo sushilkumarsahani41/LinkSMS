@@ -641,6 +641,7 @@ function App() {
                             {current.sim} <span>·</span>{" "}
                             {deviceName(current.deviceId)}
                           </p>
+                          {current.model && <p>{current.model}</p>}
                         </div>
                       </div>
                       <div className="date-divider">

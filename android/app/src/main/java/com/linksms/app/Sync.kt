@@ -5,6 +5,9 @@ import android.content.*
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteDatabase
 import android.provider.Telephony
+import android.telephony.SubscriptionManager
+import android.content.pm.PackageManager
+import android.Manifest
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -40,6 +43,12 @@ class Settings(context: Context) {
  var status: String
   get() = prefs.getString("status", "No messages synced yet")!!
   set(value) { prefs.edit().putString("status", value).apply() }
+ var lockEnabled: Boolean
+  get() = prefs.getBoolean("lockEnabled", true)
+  set(value) { prefs.edit().putBoolean("lockEnabled", value).apply() }
+ fun hasKey(): Boolean = prefs.contains("key")
+ fun simName(slot: Int): String = prefs.getString("simName$slot", "") ?: ""
+ fun setSimName(slot: Int, value: String) { prefs.edit().putString("simName$slot", value.trim().take(60)).apply() }
  private fun wrappingKey(): SecretKey {
   val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
   return (store.getKey("linksms-local", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
@@ -70,6 +79,13 @@ class Queue(context: Context) : SQLiteOpenHelper(context, "outbox.db", null, 1) 
  fun clear() { writableDatabase.delete("outbox", null, null) }
 }
 
+fun simDescription(settings: Settings, zeroBasedSlot: Int?, subscription: String, carrier: String = ""): String {
+ val label = zeroBasedSlot?.let { settings.simName(it + 1) }.orEmpty()
+ val source = zeroBasedSlot?.let { "SIM ${it + 1}" } ?: "Subscription $subscription"
+ val display = label.ifBlank { carrier }
+ return if(display.isBlank()) source else "$source · $display"
+}
+
 class SmsReceiver : BroadcastReceiver() {
  override fun onReceive(context: Context, intent: Intent) {
   if(intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION || FirebaseApp.getApps(context).isEmpty()) return
@@ -82,10 +98,16 @@ class SmsReceiver : BroadcastReceiver() {
    if(parts.isEmpty()) return
    val id = UUID.randomUUID().toString()
    val subscription = intent.extras?.get("subscription")?.toString() ?: "unknown"
-   val slot = intent.extras?.get("slot")?.toString() ?: intent.extras?.get("slotIndex")?.toString()
+   val info = if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) runCatching {
+    subscription.toIntOrNull()?.let { context.getSystemService(SubscriptionManager::class.java).getActiveSubscriptionInfo(it) }
+   }.getOrNull() else null
+   val slot = intent.extras?.get("slot")?.toString() ?: intent.extras?.get("slotIndex")?.toString() ?: info?.simSlotIndex?.toString()
    val payload = JSONObject().put("sender", parts[0].displayOriginatingAddress ?: "Unknown sender")
     .put("body", parts.joinToString("") { it.displayMessageBody ?: "" })
-    .put("sim", if(slot != null) "SIM slot ${slot.toIntOrNull()?.plus(1) ?: slot}" else "Subscription $subscription")
+     .put("sim", simDescription(settings, slot?.toIntOrNull(), subscription, info?.carrierName?.toString().orEmpty()))
+    .put("model", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+    .put("subscriptionId", subscription)
+    .put("simSlot", slot?.toIntOrNull()?.plus(1) ?: JSONObject.NULL)
    val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key); updateAAD("$uid/${settings.deviceId}/$id".toByteArray(Charsets.UTF_8)) }
    val ciphertext = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
    val record = JSONObject().put("deviceId", settings.deviceId).put("iv", Settings.b64(cipher.iv)).put("ciphertext", Settings.b64(ciphertext)).put("version", 1).put("receivedAt", parts[0].timestampMillis)
@@ -131,7 +153,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
  }
  companion object {
   private val constraints get() = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
-  fun enqueue(context: Context) { WorkManager.getInstance(context).enqueueUniqueWork("sms-upload", ExistingWorkPolicy.APPEND_OR_REPLACE, OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()) }
+  fun enqueue(context: Context) { WorkManager.getInstance(context).enqueueUniqueWork("sms-upload", ExistingWorkPolicy.APPEND_OR_REPLACE, OneTimeWorkRequestBuilder<SyncWorker>().apply { if (android.os.Build.VERSION.SDK_INT >= 31) setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) }.setConstraints(constraints).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()) }
   fun schedule(context: Context) { WorkManager.getInstance(context).enqueueUniquePeriodicWork("sms-retry", ExistingPeriodicWorkPolicy.KEEP, PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(constraints).build()) }
  }
 }

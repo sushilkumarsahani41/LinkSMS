@@ -28,4 +28,10 @@ Pairing currently uses a manually shared encryption key. There is no QR pairing,
 
 ## Live cloud verification
 
-A temporary account successfully created a device document, uploaded an AES-GCM-encrypted synthetic message, received it through a realtime listener, and decrypted it correctly. No plaintext body/sender fields were stored. The first attempt immediately after deployment was denied; the later attempt passed without loosening rules. Temporary test documents and accounts were cleaned up. Real SMS capture and OTP delivery are still pending user account sign-in, shared-key setup, permission grant, and an incoming SMS on each SIM.
+A temporary account successfully created a device document, uploaded an AES-GCM-encrypted synthetic message, received it through a realtime listener, and decrypted it correctly. No plaintext body/sender fields were stored. The first attempt immediately after deployment was denied; the later attempt passed without loosening rules. Temporary test documents and accounts were cleaned up. The user confirmed that a normal SMS sent to the first Nord 3 SIM appeared in the web inbox. Other SIMs, actual OTPs and offline/background reliability still need separate validation.
+
+## Android inbox update (0.2.0)
+
+Implemented a native unified inbox, source filters, search, copy actions, phone-screen-lock app protection, custom device/SIM names, optional carrier/slot discovery, and encrypted hardware-model metadata for new messages. The original saved key and account are preserved on upgrade. Passkeys remain out of scope; no billing plan changes.
+
+The user confirmed that screen-lock authentication opens the POCO Pad inbox and displays synced messages. Android build/lint and all three Android unit tests pass, as do the web build and six web tests. The final update adds optional carrier/slot discovery. The Nord 3 update is pending connection.

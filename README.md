@@ -4,7 +4,7 @@ A private, receive-only SMS inbox for a OnePlus Nord 3 and POCO Pad, with a web 
 
 ## What is implemented
 
-- Kotlin / Jetpack Compose Android companion: email/password sign-in, explicit SMS permission, opt-in sync, device naming, pause and sign-out.
+- Kotlin / Jetpack Compose Android app: combined inbox across all linked devices, source filters, search, OTP/message copy, screen-lock authentication, email/password sign-in, SMS permission, opt-in sync, device/SIM naming, pause and sign-out.
 - New incoming SMS capture, multipart assembly, best-effort SIM slot/subscription labels, AES-256-GCM encryption before writing to a durable SQLite outbox, and WorkManager network retry.
 - React web inbox: demo mode, sign-in, latest 200 messages, device and verification-code filters, search, copy code/message, delete synced messages, and remote pause/resume of uploads.
 - Firestore rules isolate each user's documents and reject plaintext fields and uploads from paused devices.
@@ -107,3 +107,16 @@ Device acceptance checklist:
 - Confirm another account cannot read your messages and a wrong encryption key cannot decrypt them.
 
 Reference: [Android SMS broadcasts](https://developer.android.com/reference/android/provider/Telephony.Sms.Intents), [SMS permission restrictions](https://developer.android.com/reference/android/Manifest.permission#RECEIVE_SMS), [Firebase Android setup](https://firebase.google.com/docs/android/setup), [Play SMS policy](https://support.google.com/googleplay/android-developer/answer/10208820).
+
+## Android 0.2: travel inbox and app lock
+
+The Android app now reads the same latest-200-message cloud inbox as the web app. You can carry the Nord 3 and view SMS uploaded by the home tablet, provided the tablet remains online and enabled for sync. The inbox works independently of whether the viewing device has local SMS permission.
+
+- After one-time connection-key setup, Android saves the key using the existing Keystore wrapper. Opening the inbox uses the phone’s fingerprint, supported strong face biometric, or device PIN/password/pattern. The app locks when it leaves the foreground; a Lock button is also available. The lock can be disabled from unlocked settings.
+- The app lock protects access through the UI. The background receiver still needs access to its saved encryption key to encrypt incoming SMS while locked. This is not a per-operation biometric-bound encryption key. Screenshots and recent-app previews are protected with FLAG_SECURE.
+- Settings → Devices & settings allows a device nickname and SIM 1/SIM 2 nicknames. Device names update existing inbox source labels. SIM nicknames and hardware model are encrypted inside new messages, so older messages keep their original SIM labels.
+- Optional Read SIM details permission shows carrier, slot and subscription ID and improves slot identification. Phone numbers are not read or uploaded. With no permission, Android broadcast metadata is used; subscription ID is the fallback when a slot is unavailable.
+- New SMS uploads request expedited work on Android 12+, falling back to normal queued work when quota is exhausted. This improves scheduling but cannot guarantee instantaneous delivery or bypass Android power restrictions.
+- Passkeys were explicitly removed from scope. Email/password sign-in remains. There are no paid backends, billing-plan changes or new Firestore schema/rule requirements. Browser unlocking continues to use the existing session key flow.
+
+Validation includes Android build/lint, three Android unit tests (including a WebCrypto-produced ciphertext fixture), web build, encryption tests and browser workflow tests. Real fingerprint/PIN unlock must be confirmed by the device owner.
