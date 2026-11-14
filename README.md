@@ -27,7 +27,7 @@ Open the local URL printed by Vite. Add `?demo=1` to view sample messages even w
 
 1. Open [Firebase project settings](https://console.firebase.google.com/project/linksms-9e899/settings/general). The Android package is `com.linksms.app`.
 2. Download the Android client's `google-services.json` into `android/app/`. Add the web client's API key, app ID and auth domain to `web/.env.local`. These local files are ignored by Git.
-3. In Authentication → Sign-in method, enable Email/Password. In Users, create your own account. Use the same account on the web and both Android devices. Do not send your password in chat.
+3. In Authentication → Sign-in method, enable Email/Password. Create your account using the web app’s **New here? Create account** button, or through the Firebase Users console. Use the same account on the web and both Android devices. Do not send your password in chat.
 4. Create the default Cloud Firestore database if one does not exist. Choose an appropriate region and production mode.
 5. Review and deploy the rules before enabling sync:
 

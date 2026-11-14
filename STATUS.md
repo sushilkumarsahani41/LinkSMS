@@ -4,7 +4,7 @@
 
 - React demo inbox served by `npm run dev`, with `?demo=1` for an explicit demo.
 - Android debug APK builds and lint has no errors. Warnings remain for version updates and synchronous preference writes.
-- Three encryption/OTP tests and two browser workflow tests pass.
+- Three encryption/OTP tests and three browser workflow tests pass, including account-form validation.
 - Firestore authorization tests pass against a local demo emulator.
 - Production npm dependency audit: zero reported vulnerabilities. Development tooling audit reports 14 moderate findings; review before upgrading/releasing.
 - Source, lockfile, Firebase rules, setup guide and Git repository created.
@@ -16,12 +16,16 @@ Project `linksms-9e899` already existed and was accessible through the signed-in
 - Registered Android app `com.linksms.app`, app ID `1:514719083100:android:bd31e001c29bfebe951499`.
 - Downloaded its config to ignored `android/app/google-services.json`.
 - Registered web app `LinkSMS Web`, app ID `1:514719083100:web:f90be500a559aa61951499`.
-- Web SDK config fetch repeatedly failed at the CLI network request. `web/.env.local` has not been filled; copy web SDK settings from Firebase Console.
-- Cloud Firestore API is disabled / has not been used in this project. Database creation, email/password authentication setup, account creation and production rules deployment remain.
-- No hosting deployment or production security-rule changes were made.
+- Web SDK configuration is saved in ignored `web/.env.local`. The local web app now supports live sign-in and account creation.
+- With user authorization for live testing, enabled Firestore and created the default Standard database in Mumbai (`asia-south1`), confirmed free-tier eligible. Enabled email/password authentication through the Firebase CLI and deployed the tested Firestore rules.
+- Production Firestore rules and authentication provider configuration are deployed. Hosting remains undeployed; the web app is served locally.
 
 ## Next device validation
 
-The Nord 3 and POCO Pad have not been connected or tested. Verify exact Android versions and test an ordinary SMS and a real OTP on all three SIMs. Android 16 QPR2 adds OTP access restrictions that may require an eligible full default-SMS app; this MVP does not implement that role. Do not assume OTP support from an ordinary SMS test.
+The APK is installed on both the Nord 3 and POCO Pad; each activity launched successfully over ADB. The POCO Pad required enabling Install via USB; the Nord 3 initially rejected installation through app verification, then accepted a later user-requested retry. Verify exact Android versions and test an ordinary SMS and a real OTP on all three SIMs. Android 16 QPR2 adds OTP access restrictions that may require an eligible full default-SMS app; this MVP does not implement that role. Do not assume OTP support from an ordinary SMS test.
 
 Pairing currently uses a manually shared encryption key. There is no QR pairing, recovery, automatic retention, old-SMS import, full SMS composer, or independent device credential revocation.
+
+## Live cloud verification
+
+A temporary account successfully created a device document, uploaded an AES-GCM-encrypted synthetic message, received it through a realtime listener, and decrypted it correctly. No plaintext body/sender fields were stored. The first attempt immediately after deployment was denied; the later attempt passed without loosening rules. Temporary test documents and accounts were cleaned up. Real SMS capture and OTP delivery are still pending user account sign-in, shared-key setup, permission grant, and an incoming SMS on each SIM.

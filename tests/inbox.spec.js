@@ -49,3 +49,23 @@ test("setup generates a valid key and inbox fits narrow screens", async ({
   ).toBeLessThanOrEqual(390);
   await page.screenshot({ path: "work/web-mobile.png", fullPage: true });
 });
+
+test("account form rejects mismatched passwords before contacting Firebase", async ({
+  page,
+}) => {
+  await page.goto("http://127.0.0.1:5173/");
+  await page.getByRole("button", { name: "New here? Create account" }).click();
+  await page
+    .getByLabel("Email", { exact: true })
+    .fill("local-validation@example.invalid");
+  await page.getByLabel("Password", { exact: true }).fill("local-only-example");
+  await page
+    .getByLabel("Confirm password", { exact: true })
+    .fill("different-example");
+  await page
+    .getByRole("button", { name: "Create account", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "The passwords do not match.",
+  );
+});

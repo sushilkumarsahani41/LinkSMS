@@ -19,6 +19,7 @@ import {
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
 import {
@@ -123,6 +124,8 @@ function App() {
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
     [busy, setBusy] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loaded, setLoaded] = useState(false),
     [otpOnly, setOtpOnly] = useState(false);
   useEffect(() => {
@@ -239,15 +242,41 @@ function App() {
   }
   async function login(e) {
     e.preventDefault();
-    setBusy(true);
     setError("");
+    if (creatingAccount && password !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    setBusy(true);
     try {
       await authReady;
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      if (creatingAccount) {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
+      } else {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+      setConfirmPassword("");
       setPassword("");
       setDemo(false);
-    } catch {
-      setError("Sign-in failed. Check your email, password and connection.");
+    } catch (error) {
+      const messages = {
+        "auth/email-already-in-use":
+          "An account already uses that email. Choose Sign in instead.",
+        "auth/weak-password":
+          "Choose a stronger password with at least 8 characters.",
+        "auth/operation-not-allowed":
+          "Email/password sign-in is not enabled in Firebase yet.",
+        "auth/network-request-failed":
+          "Could not reach Firebase. Check your connection.",
+        "auth/too-many-requests":
+          "Too many attempts. Please wait before trying again.",
+      };
+      setError(
+        messages[error.code] ??
+          (creatingAccount
+            ? "Account creation failed. Check your email and connection."
+            : "Sign-in failed. Check your email, password and connection."),
+      );
     } finally {
       setBusy(false);
     }
@@ -410,7 +439,11 @@ function App() {
         {!demo && !user ? (
           <section className="login card">
             <LockKeyhole size={32} />
-            <h2>Your private inbox awaits.</h2>
+            <h2>
+              {creatingAccount
+                ? "Create your LinkSMS account."
+                : "Your private inbox awaits."}
+            </h2>
             <p>Use the same account on your Android devices and here.</p>
             <form onSubmit={login}>
               <label>
@@ -428,15 +461,49 @@ function App() {
                 <input
                   type="password"
                   required
-                  autoComplete="current-password"
+                  autoComplete={
+                    creatingAccount ? "new-password" : "current-password"
+                  }
+                  minLength={creatingAccount ? 8 : undefined}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
               </label>
+              {creatingAccount && (
+                <label>
+                  Confirm password
+                  <input
+                    type="password"
+                    required
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                </label>
+              )}
               <button className="primary" disabled={busy || authLoading}>
-                {busy ? "Signing in…" : "Sign in"}
+                {busy
+                  ? "Please wait…"
+                  : creatingAccount
+                    ? "Create account"
+                    : "Sign in"}
               </button>
             </form>
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() => {
+                setCreatingAccount(!creatingAccount);
+                setPassword("");
+                setConfirmPassword("");
+                setError("");
+              }}
+            >
+              {creatingAccount
+                ? "Already have an account? Sign in"
+                : "New here? Create account"}
+            </button>
+            <br />
             <button className="text-button" onClick={() => setDemo(true)}>
               Explore the demo
             </button>
