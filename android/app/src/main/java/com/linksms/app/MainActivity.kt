@@ -15,6 +15,15 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.Lifecycle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,6 +50,9 @@ import java.util.Date
 import kotlinx.coroutines.tasks.await
 
 class MainActivity : FragmentActivity() {
+    private val unlockGate = UnlockGate()
+    private var foregroundVisit by mutableStateOf(0)
+    private lateinit var biometricPrompt: BiometricPrompt
     private var permissionGranted by mutableStateOf(false)
     private var simPermissionGranted by mutableStateOf(false)
     private var unlocked by mutableStateOf(false)
@@ -48,74 +60,89 @@ class MainActivity : FragmentActivity() {
     private val requestSms = registerForActivityResult(ActivityResultContracts.RequestPermission()) { permissionGranted = it }
     private val requestSimDetails = registerForActivityResult(ActivityResultContracts.RequestPermission()) { simPermissionGranted = it }
     private val deviceCredential = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        unlockGate.finished()
         unlocked = it.resultCode == RESULT_OK
         if (!unlocked) lockError = "Unlock cancelled. Your messages remain locked."
     }
     override fun onResume() {
         super.onResume()
+        foregroundVisit++
         permissionGranted = checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
         simPermissionGranted = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
     }
     override fun onStop() {
         if (Settings(this).lockEnabled) unlocked = false
+        unlockGate.backgrounded()
         super.onStop()
     }
-    private fun unlockInbox() {
+    private fun unlockInbox(automatic: Boolean = false) {
+        if (!unlockGate.begin(automatic)) return
         lockError = ""
         val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         if (!keyguard.isDeviceSecure) {
+            unlockGate.finished()
             lockError = "Set a screen-lock PIN, password or pattern in your phone settings first."
             return
         }
         if (Build.VERSION.SDK_INT >= 30) {
             val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-            val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { unlocked = true; lockError = "" }
-                override fun onAuthenticationError(code: Int, message: CharSequence) { lockError = message.toString() }
-            })
-            prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock LinkSMS").setSubtitle("Use your phone's screen lock to view messages").setAllowedAuthenticators(authenticators).build())
+            biometricPrompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock LinkSMS").setSubtitle("Use your phone's screen lock to view messages").setAllowedAuthenticators(authenticators).build())
         } else {
             @Suppress("DEPRECATION")
             val intent = keyguard.createConfirmDeviceCredentialIntent("Unlock LinkSMS", "Confirm your phone's screen lock")
-            if (intent != null) deviceCredential.launch(intent)
+            if (intent != null) deviceCredential.launch(intent) else unlockGate.finished()
         }
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("promptActive", unlockGate.promptActive)
+        super.onSaveInstanceState(outState)
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState?.getBoolean("promptActive") == true) unlockGate.begin(false)
+        biometricPrompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                unlockGate.finished()
+                unlocked = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                lockError = ""
+            }
+            override fun onAuthenticationError(code: Int, message: CharSequence) {
+                unlockGate.finished()
+                lockError = message.toString()
+            }
+        })
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val settings = Settings(this)
         val configured = FirebaseApp.getApps(this).isNotEmpty()
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF236957), background = Color(0xFFF5F7F3))) {
+            LinkSmsTheme {
                 var signedIn by remember { mutableStateOf(configured && FirebaseAuth.getInstance().currentUser != null) }
                 var lockEnabled by remember { mutableStateOf(settings.lockEnabled) }
                 var page by remember { mutableStateOf("Inbox") }
                 var keyReady by remember { mutableStateOf(settings.hasKey()) }
-                Surface(Modifier.fillMaxSize()) {
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 20.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Column { Text("LinkSMS", style = MaterialTheme.typography.headlineMedium); Text("Your messages, together.", style = MaterialTheme.typography.bodySmall) }
-                            if (signedIn && unlocked && lockEnabled) TextButton(onClick = { unlocked = false }) { Text("Lock") }
+                LaunchedEffect(foregroundVisit, signedIn, lockEnabled, unlocked) {
+                    if (signedIn && lockEnabled && !unlocked && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) unlockInbox(automatic = true)
+                }
+                Scaffold(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    bottomBar = {
+                        if (signedIn && (unlocked || !lockEnabled)) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                            NavigationBarItem(selected = page == "Inbox", onClick = { page = "Inbox" }, icon = { Icon(Icons.Outlined.Forum, null) }, label = { Text("Messages") })
+                            NavigationBarItem(selected = page == "Settings", onClick = { page = "Settings" }, icon = { Icon(Icons.Outlined.Tune, null) }, label = { Text("Devices & settings") })
                         }
+                    }
+                ) { padding ->
+                    Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp)) {
+                        BrandHeader(showLock = signedIn && unlocked && lockEnabled, onLock = { unlockGate.manualLock(); unlocked = false })
                         when {
                             !configured -> Text("Firebase setup needed. Add google-services.json and rebuild this app.")
-                            !signedIn -> LoginPanel { signedIn = true; unlocked = false }
-                            lockEnabled && !unlocked -> Column(Modifier.padding(top = 60.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                                Text("Your inbox is locked", style = MaterialTheme.typography.headlineSmall)
-                                Text("Unlock with fingerprint, supported face recognition, or your device PIN. Background SMS sync continues while locked.")
-                                Button(onClick = { unlockInbox() }) { Text("Unlock with screen lock") }
-                                if (lockError.isNotBlank()) Text(lockError, color = MaterialTheme.colorScheme.error)
-                            }
+                            !signedIn -> LoginPanel { unlockGate.signedIn(); signedIn = true; unlocked = false }
+                            lockEnabled && !unlocked -> LockedPanel(error = lockError, onUnlock = { unlockInbox() })
                             else -> {
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    FilterChip(selected = page == "Inbox", onClick = { page = "Inbox" }, label = { Text("Inbox") })
-                                    FilterChip(selected = page == "Settings", onClick = { page = "Settings" }, label = { Text("Devices & settings") })
-                                }
                                 if (page == "Inbox" && keyReady) UnifiedInbox(settings)
-                                else if (page == "Inbox") Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                    Text("Connect this device once", style = MaterialTheme.typography.titleLarge)
-                                    Text("Add the same encryption key you use in your web inbox. LinkSMS saves it securely on this device; after that, use your screen lock to open the inbox.")
-                                    Button(onClick = { page = "Settings" }) { Text("Set up this device") }
+                                else if (page == "Inbox") SettingsGroup("Connect this device", "One-time setup", Icons.Outlined.Phonelink) {
+                                    Text("Add the key from your web inbox once. After that, use your phone's screen lock to open your messages.")
+                                    Button(onClick = { page = "Settings" }, modifier = Modifier.fillMaxWidth()) { Text("Set up this device") }
                                 }
                                 else SettingsPanel(settings, permissionGranted, simPermissionGranted, lockEnabled,
                                     onSimPermission = { requestSimDetails.launch(Manifest.permission.READ_PHONE_STATE) },
@@ -140,7 +167,9 @@ private fun LoginPanel(onSignedIn: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Sign in", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(24.dp))
+        Text("Welcome back.", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
+        Text("One inbox. Wherever life takes you.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Use the account you created in your LinkSMS web inbox.")
         OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(password, { password = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -166,6 +195,7 @@ private fun UnifiedInbox(settings: Settings) {
     var error by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var fromCache by remember { mutableStateOf(false) }
+    var codesOnly by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     DisposableEffect(uid, key) {
@@ -184,31 +214,66 @@ private fun UnifiedInbox(settings: Settings) {
         }
         onDispose { deviceListener.remove(); messageListener.remove() }
     }
-    val visible = messages.filter { (filter.isBlank() || it.deviceId == filter) && "${it.sender} ${it.body} ${it.sim}".contains(search, ignoreCase = true) }
-    Column {
-        OutlinedTextField(search, { search = it }, label = { Text("Search messages") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = filter.isBlank(), onClick = { filter = "" }, label = { Text("All devices") })
-            devices.forEach { d -> FilterChip(selected = filter == d.id, onClick = { filter = d.id }, label = { Text(d.name) }) }
+    val visible = messages.filter { (filter.isBlank() || it.deviceId == filter) && (!codesOnly || MessageCodec.otp(it.body) != null) && "${it.sender} ${it.body} ${it.sim}".contains(search, ignoreCase = true) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("All together.", fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-1).sp)
+                Text("${devices.size} linked devices · ${messages.size} recent messages", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(14.dp)) {
+                Icon(Icons.Outlined.Shield, null, Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.primary)
+            }
         }
-        if (fromCache) Text("Showing saved messages; waiting for cloud connection.", style = MaterialTheme.typography.bodySmall)
+        OutlinedTextField(search, { search = it }, placeholder = { Text("Search your messages", fontSize = 14.sp) }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, singleLine = true, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surface))
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = filter.isBlank(), onClick = { filter = "" }, label = { Text("All devices") })
+            devices.forEach { d -> FilterChip(selected = filter == d.id, onClick = { filter = d.id }, label = { Text(d.name) }, leadingIcon = { Icon(Icons.Outlined.Smartphone, null, Modifier.size(16.dp)) }) }
+        }
+        Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(if (codesOnly) "VERIFICATION CODES" else "LATEST MESSAGES", fontSize = 10.sp, letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilterChip(selected = codesOnly, onClick = { codesOnly = !codesOnly }, label = { Text("Codes only", fontSize = 11.sp) }, leadingIcon = { Icon(Icons.Outlined.Password, null, Modifier.size(16.dp)) })
+        }
+        if (fromCache) Text("Saved messages · waiting for connection", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-        if (key == null) Text("The saved key could not be opened. Reconnect this device in settings.")
-        if (copied) Text("Copied. Clear your clipboard when finished.", style = MaterialTheme.typography.bodySmall)
+        if (key == null) Text("Reconnect your saved key in settings to read messages.")
+        if (copied) Text("Copied to clipboard", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        else if (visible.isEmpty()) Text(if (search.isNotBlank()) "No matching messages." else "No messages yet. New SMS from your linked devices will appear here.", modifier = Modifier.padding(vertical = 24.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.weight(1f)) {
+        else if (visible.isEmpty()) Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Outlined.MarkChatUnread, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(14.dp))
+            Text(if (search.isNotBlank() || codesOnly) "No matching messages" else "You're all caught up", fontWeight = FontWeight.SemiBold)
+            Text("New messages from your devices appear here.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 20.dp), modifier = Modifier.weight(1f)) {
             items(visible, key = { it.id }) { message ->
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(message.sender, style = MaterialTheme.typography.titleMedium)
-                        Text("${devices.find { it.id == message.deviceId }?.name ?: "Unknown device"} · ${message.sim}", style = MaterialTheme.typography.labelMedium)
-                        if (message.model.isNotBlank()) Text(message.model, style = MaterialTheme.typography.bodySmall)
-                        Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(message.receivedAt)), style = MaterialTheme.typography.bodySmall)
-                        Text(message.body)
-                        if (!message.unreadable) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            MessageCodec.otp(message.body)?.let { code -> TextButton(onClick = { clipboard.setText(AnnotatedString(code)); copied = true }) { Text("Copy code") } }
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(message.body)); copied = true }) { Text("Copy message") }
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(22.dp)) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(13.dp), modifier = Modifier.size(42.dp)) {
+                                Box(contentAlignment = Alignment.Center) { Text(message.sender.take(1).uppercase(), fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(message.sender, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(message.receivedAt)), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SourceTag(devices.find { it.id == message.deviceId }?.name ?: "Unknown device", Icons.Outlined.Smartphone)
+                            SourceTag(message.sim, Icons.Outlined.SimCard)
+                        }
+                        Text(message.body, fontSize = 14.sp, lineHeight = 22.sp)
+                        if (message.model.isNotBlank()) Text(message.model, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (!message.unreadable) {
+                            MessageCodec.otp(message.body)?.let { code ->
+                                Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f), shape = RoundedCornerShape(14.dp)) {
+                                    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Column { Text("VERIFICATION CODE", fontSize = 8.sp, letterSpacing = 1.sp); Text(code, fontSize = 25.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 3.sp) }
+                                        FilledTonalIconButton(onClick = { clipboard.setText(AnnotatedString(code)); copied = true }) { Icon(Icons.Outlined.ContentCopy, "Copy code", Modifier.size(18.dp)) }
+                                    }
+                                }
+                            }
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(message.body)); copied = true }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(14.dp)); Spacer(Modifier.width(6.dp)); Text("Copy message", fontSize = 11.sp) }
                         }
                     }
                 }
@@ -233,8 +298,9 @@ private fun SettingsPanel(settings: Settings, smsPermission: Boolean, simPermiss
     var signOutConfirmation by remember { mutableStateOf(false) }
     if (signOutConfirmation) AlertDialog(onDismissRequest = { signOutConfirmation = false }, title = { Text("Sign out?") }, text = { Text("This clears the saved key and any unsent messages on this device. Cloud messages and original SMS stay in place. Keep your recovery key before signing out.") }, confirmButton = { TextButton(onClick = onSignOut) { Text("Sign out") } }, dismissButton = { TextButton(onClick = { signOutConfirmation = false }) { Text("Cancel") } })
     Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("This device", style = MaterialTheme.typography.titleLarge)
-        Text("${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
+        Text("Make it yours.", fontSize = 29.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.8).sp)
+        Text("Your devices, privacy and connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        SettingsGroup("This device", "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}", Icons.Outlined.Smartphone) {
         OutlinedTextField(name, { name = it.take(80) }, label = { Text("Device nickname") }, placeholder = { Text("Travel phone / Home tablet") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(sim1, { sim1 = it.take(60) }, label = { Text("SIM 1 nickname") }, placeholder = { Text("Personal · Airtel") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(sim2, { sim2 = it.take(60) }, label = { Text("SIM 2 nickname (if present)") }, placeholder = { Text("Work · Jio") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -258,12 +324,12 @@ private fun SettingsPanel(settings: Settings, smsPermission: Boolean, simPermiss
             } catch (_: Exception) { status = "Could not save the device name. Check your connection." }
             finally { busy = false }
         } }) { Text("Save names") }
-        HorizontalDivider()
-        Text("App lock", style = MaterialTheme.typography.titleLarge)
+        }
+        SettingsGroup("Privacy", "Your screen lock, your messages", Icons.Outlined.Shield) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Use phone screen lock"); Switch(checked = lockEnabled, onCheckedChange = onLockChanged) }
         Text("When enabled, the inbox locks whenever you leave LinkSMS. SMS receiving and uploads continue in the background. Screenshots and recent-app previews are protected.", style = MaterialTheme.typography.bodySmall)
-        HorizontalDivider()
-        Text("Connection & sync", style = MaterialTheme.typography.titleLarge)
+        }
+        SettingsGroup("Connection & sync", "Encrypted across your devices", Icons.Outlined.Sync) {
         if (keyReady && !changingKey) {
             Text("Encryption key saved on this device. You do not need to enter it again to view messages.")
             TextButton(onClick = { changingKey = true }) { Text("Replace connection key") }
@@ -292,6 +358,7 @@ private fun SettingsPanel(settings: Settings, smsPermission: Boolean, simPermiss
         Text(status)
         Text("Keep the device powered on with internet and cellular reception. Allow background activity and auto-start in battery settings. Offline messages retry when internet returns; Android may delay delivery.", style = MaterialTheme.typography.bodySmall)
         if (Build.VERSION.SDK_INT >= 36) Text("Android 16 can restrict OTP SMS access. Test actual OTP delivery separately from ordinary SMS.", style = MaterialTheme.typography.bodySmall)
-        OutlinedButton(onClick = { signOutConfirmation = true }) { Text("Sign out") }
+        }
+        OutlinedButton(onClick = { signOutConfirmation = true }, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
     }
 }

@@ -35,3 +35,7 @@ A temporary account successfully created a device document, uploaded an AES-GCM-
 Implemented a native unified inbox, source filters, search, copy actions, phone-screen-lock app protection, custom device/SIM names, optional carrier/slot discovery, and encrypted hardware-model metadata for new messages. The original saved key and account are preserved on upgrade. Passkeys remain out of scope; no billing plan changes.
 
 The user confirmed that screen-lock authentication opens the POCO Pad inbox and displays synced messages. Android build/lint and all three Android unit tests pass, as do the web build and six web tests. The final update adds optional carrier/slot discovery. LinkSMS 0.2.0 was also installed successfully on the Nord 3 via an in-place update. Its main activity launched and SMS permission remained granted. Screen-lock authentication and message viewing on the Nord 3 await owner confirmation.
+
+## Android 0.3.0
+
+Implemented modern light/dark styling, bottom navigation, source badges, OTP-focused cards, a codes-only filter, grouped settings and automatic system unlock prompts on foreground entry. Cancellation and manual locking do not cause repeated prompts. Android build/lint and seven unit tests pass. Installed successfully on the POCO Pad. The updated inbox was observed, and the owner confirmed the system unlock prompt appeared automatically without tapping Unlock. The Nord 3 still needs the 0.3 update. No Firebase settings, rules, billing or message schema changed.

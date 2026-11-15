@@ -120,3 +120,9 @@ The Android app now reads the same latest-200-message cloud inbox as the web app
 - Passkeys were explicitly removed from scope. Email/password sign-in remains. There are no paid backends, billing-plan changes or new Firestore schema/rule requirements. Browser unlocking continues to use the existing session key flow.
 
 Validation includes Android build/lint, three Android unit tests (including a WebCrypto-produced ciphertext fixture), web build, encryption tests and browser workflow tests. Real fingerprint/PIN unlock must be confirmed by the device owner.
+
+## Android 0.3: refreshed interface and automatic unlock
+
+The Android interface now uses light/dark themes, rounded source-labelled message cards, a prominent OTP copy area, a codes-only filter, bottom navigation and grouped settings. With app lock enabled, opening or returning to LinkSMS automatically requests system authentication. Cancelling leaves the app locked with an explicit retry button; it does not repeatedly reopen the prompt. The manual Lock action also stays locked until you choose to unlock. Background capture and encryption are unchanged.
+
+Four additional unit tests cover automatic-prompt suppression after cancellation, return-to-app behavior, credential-dialog transitions and manual locking. Device-owner confirmation is still required for successful biometric/PIN authentication.

@@ -7,7 +7,7 @@ if (file("google-services.json").exists()) { apply(plugin = "com.google.gms.goog
 android {
  namespace = "com.linksms.app"
  compileSdk = 35
- defaultConfig { applicationId = "com.linksms.app"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.2.0" }
+ defaultConfig { applicationId = "com.linksms.app"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "0.3.0" }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }
  buildFeatures { compose = true }
@@ -20,6 +20,7 @@ dependencies {
  implementation("androidx.fragment:fragment-ktx:1.8.5")
  implementation("androidx.biometric:biometric:1.1.0")
  implementation("androidx.compose.material3:material3")
+ implementation("androidx.compose.material:material-icons-extended")
  implementation("androidx.work:work-runtime-ktx:2.10.0")
  implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
  implementation("com.google.firebase:firebase-auth")
