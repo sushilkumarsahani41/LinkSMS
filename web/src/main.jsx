@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   MessageSquare,
@@ -128,6 +128,7 @@ function App() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loaded, setLoaded] = useState(false),
     [otpOnly, setOtpOnly] = useState(false);
+  const decrypted = useRef({ key: null, uid: null, items: new Map() });
   useEffect(() => {
     if (!auth) return;
     return onAuthStateChanged(auth, (u) => {
@@ -177,12 +178,20 @@ function App() {
       setMessages([]);
       return;
     }
+    // Reuse earlier decryptions: a snapshot usually adds one message, so only new records are decrypted.
+    const cache = decrypted.current;
+    if (cache.key !== key || cache.uid !== user.uid)
+      decrypted.current = { key, uid: user.uid, items: new Map() };
+    const items = decrypted.current.items;
     Promise.all(
       records.map(async (r) => {
+        const hit = items.get(r.id);
+        if (hit && hit.ciphertext === r.ciphertext && hit.iv === r.iv) return hit;
+        let m;
         try {
-          return { ...r, ...(await decryptMessage(key, r, user.uid)) };
+          m = { ...r, ...(await decryptMessage(key, r, user.uid)) };
         } catch {
-          return {
+          m = {
             ...r,
             sender: "Unable to decrypt",
             body: "This message uses a different key or its encrypted data is invalid.",
@@ -190,9 +199,16 @@ function App() {
             locked: true,
           };
         }
+        m.otp = m.locked ? null : extractOtp(m.body);
+        m.searchText = `${m.sender} ${m.body} ${m.sim}`.toLowerCase();
+        items.set(r.id, m);
+        return m;
       }),
     ).then((m) => {
-      if (active) setMessages(m);
+      if (!active) return;
+      const live = new Set(records.map((r) => r.id));
+      for (const id of items.keys()) if (!live.has(id)) items.delete(id);
+      setMessages(m);
     });
     return () => {
       active = false;
@@ -204,19 +220,26 @@ function App() {
     return () => clearTimeout(timer);
   }, [notice]);
   const allDevices = demo ? demoDevices : devices;
-  const allMessages = demo ? demoMessages : messages;
-  const visible = useMemo(
+  const allMessages = useMemo(
     () =>
-      allMessages.filter(
-        (m) =>
-          (filter === "all" || m.deviceId === filter) &&
-          (!otpOnly || extractOtp(m.body)) &&
-          `${m.sender} ${m.body} ${m.sim}`
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-      ),
-    [allMessages, filter, search, otpOnly],
+      demo
+        ? demoMessages.map((m) => ({
+            ...m,
+            otp: extractOtp(m.body),
+            searchText: `${m.sender} ${m.body} ${m.sim}`.toLowerCase(),
+          }))
+        : messages,
+    [demo, messages],
   );
+  const visible = useMemo(() => {
+    const term = search.toLowerCase();
+    return allMessages.filter(
+      (m) =>
+        (filter === "all" || m.deviceId === filter) &&
+        (!otpOnly || m.otp) &&
+        m.searchText.includes(term),
+    );
+  }, [allMessages, filter, search, otpOnly]);
   const current = visible.find((m) => m.id === selected) ?? visible[0];
   const deviceName = (id) =>
     allDevices.find((d) => d.id === id)?.name ?? "Unknown device";
@@ -607,9 +630,9 @@ function App() {
                         onClick={() => setSelected(m.id)}
                       >
                         <span
-                          className={`sender-avatar ${extractOtp(m.body) ? "code-avatar" : ""}`}
+                          className={`sender-avatar ${m.otp ? "code-avatar" : ""}`}
                         >
-                          {extractOtp(m.body) ? (
+                          {m.otp ? (
                             <LockKeyhole size={19} />
                           ) : (
                             m.sender[0]
@@ -653,15 +676,15 @@ function App() {
                         · {time(current.receivedAt)}
                       </div>
                       <div className="message-bubble">{current.body}</div>
-                      {extractOtp(current.body) && (
+                      {current.otp && (
                         <div className="otp-card">
                           <div>
                             <small>VERIFICATION CODE</small>
-                            <strong>{extractOtp(current.body)}</strong>
+                            <strong>{current.otp}</strong>
                           </div>
                           <button
                             className="secondary"
-                            onClick={() => copy(extractOtp(current.body))}
+                            onClick={() => copy(current.otp)}
                           >
                             <Copy size={15} />
                             Copy code

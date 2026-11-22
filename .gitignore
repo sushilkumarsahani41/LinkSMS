@@ -1,7 +1,5 @@
 node_modules/
 dist/
-.env
-.env.local
 *.log
 .firebase/
 android/.gradle/
@@ -11,3 +9,7 @@ android/local.properties
 android/app/google-services.json
 work/
 .DS_Store
+*.jks
+*.keystore
+keystore.properties
+config.bat

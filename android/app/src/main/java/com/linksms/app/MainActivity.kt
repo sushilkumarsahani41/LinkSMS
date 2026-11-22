@@ -2,7 +2,10 @@ package com.linksms.app
 
 import android.Manifest
 import android.app.KeyguardManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.os.PersistableBundle
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -34,8 +37,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.google.firebase.FirebaseApp
@@ -188,6 +189,7 @@ private fun UnifiedInbox(settings: Settings) {
     val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
     val db = FirebaseFirestore.getInstance()
     val key = remember { runCatching { settings.key() }.getOrNull() }
+    val cache = remember(key, uid) { key?.let { DecryptCache(it, uid) } }
     var messages by remember { mutableStateOf(emptyList<InboxMessage>()) }
     var devices by remember { mutableStateOf(emptyList<LinkedDevice>()) }
     var filter by remember { mutableStateOf("") }
@@ -196,8 +198,10 @@ private fun UnifiedInbox(settings: Settings) {
     var loading by remember { mutableStateOf(true) }
     var fromCache by remember { mutableStateOf(false) }
     var codesOnly by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     var copied by remember { mutableStateOf(false) }
+    val copy = { text: String, sensitive: Boolean -> copyToClipboard(context, text, sensitive); copied = true }
+    LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(2500); copied = false } }
     DisposableEffect(uid, key) {
         val deviceListener = db.collection("users/$uid/devices").addSnapshotListener { snap, failure ->
             if (failure != null) error = "Could not load device names. Check your connection."
@@ -206,15 +210,16 @@ private fun UnifiedInbox(settings: Settings) {
         val messageListener = db.collection("users/$uid/messages").orderBy("receivedAt", Query.Direction.DESCENDING).limit(200).addSnapshotListener(MetadataChanges.INCLUDE) { snap, failure ->
             loading = false
             if (failure != null) error = "Could not load messages. Check your connection and account."
-            else if (key != null && snap != null) {
+            else if (cache != null && snap != null) {
                 error = ""
                 fromCache = snap.metadata.isFromCache
-                messages = snap.documents.map { MessageCodec.decrypt(key, uid, it) }
+                // Metadata-only events (cache → server) carry no document changes; skip re-decrypting.
+                if (snap.documentChanges.isNotEmpty() || messages.isEmpty()) messages = cache.decryptAll(snap.documents)
             }
         }
         onDispose { deviceListener.remove(); messageListener.remove() }
     }
-    val visible = messages.filter { (filter.isBlank() || it.deviceId == filter) && (!codesOnly || MessageCodec.otp(it.body) != null) && "${it.sender} ${it.body} ${it.sim}".contains(search, ignoreCase = true) }
+    val visible = remember(messages, filter, codesOnly, search) { messages.filter { (filter.isBlank() || it.deviceId == filter) && (!codesOnly || it.otp != null) && it.searchText.contains(search, ignoreCase = true) } }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
@@ -265,15 +270,15 @@ private fun UnifiedInbox(settings: Settings) {
                         Text(message.body, fontSize = 14.sp, lineHeight = 22.sp)
                         if (message.model.isNotBlank()) Text(message.model, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (!message.unreadable) {
-                            MessageCodec.otp(message.body)?.let { code ->
+                            message.otp?.let { code ->
                                 Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f), shape = RoundedCornerShape(14.dp)) {
                                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                         Column { Text("VERIFICATION CODE", fontSize = 8.sp, letterSpacing = 1.sp); Text(code, fontSize = 25.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 3.sp) }
-                                        FilledTonalIconButton(onClick = { clipboard.setText(AnnotatedString(code)); copied = true }) { Icon(Icons.Outlined.ContentCopy, "Copy code", Modifier.size(18.dp)) }
+                                        FilledTonalIconButton(onClick = { copy(code, true) }) { Icon(Icons.Outlined.ContentCopy, "Copy code", Modifier.size(18.dp)) }
                                     }
                                 }
                             }
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(message.body)); copied = true }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(14.dp)); Spacer(Modifier.width(6.dp)); Text("Copy message", fontSize = 11.sp) }
+                            TextButton(onClick = { copy(message.body, true) }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(14.dp)); Spacer(Modifier.width(6.dp)); Text("Copy message", fontSize = 11.sp) }
                         }
                     }
                 }
@@ -361,4 +366,13 @@ private fun SettingsPanel(settings: Settings, smsPermission: Boolean, simPermiss
         }
         OutlinedButton(onClick = { signOutConfirmation = true }, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
     }
+}
+
+/** Marks copied SMS text as sensitive so Android 13+ hides it from clipboard previews and keyboard suggestions. */
+private fun copyToClipboard(context: Context, text: String, sensitive: Boolean) {
+    val clip = ClipData.newPlainText("LinkSMS", text)
+    if (sensitive) clip.description.extras = PersistableBundle().apply {
+        putBoolean(if (Build.VERSION.SDK_INT >= 33) android.content.ClipDescription.EXTRA_IS_SENSITIVE else "android.content.extra.IS_SENSITIVE", true)
+    }
+    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
 }
