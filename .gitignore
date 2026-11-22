@@ -11,3 +11,7 @@ android/local.properties
 android/app/google-services.json
 work/
 .DS_Store
+*.jks
+*.keystore
+keystore.properties
+.vscode/

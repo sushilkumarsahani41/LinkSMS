@@ -55,6 +55,19 @@ cd android
 
 APK: `android/app/build/outputs/apk/debug/app-debug.apk`. The Gradle wrapper includes a pinned distribution checksum. If `google-services.json` is absent, the app still builds and shows a setup screen without collecting SMS.
 
+### Signed release build
+
+`./scripts/build-android-release.sh` runs release unit tests and lint, then builds a minified, signed APK at `android/app/build/outputs/apk/release/app-release.apk`. Signing details are read from `~/.linksms-signing/keystore.properties` (or the path in `LINKSMS_SIGNING_PROPERTIES`):
+
+```properties
+storeFile=/absolute/path/to/linksms-release.jks
+storePassword=...
+keyAlias=linksms
+keyPassword=...
+```
+
+Keep the keystore and its properties out of the repository and back them up. Losing the keystore means future versions cannot update an installed copy. Moving an installed debug build to a release build requires uninstalling first, which clears that device's saved key and unsent queue.
+
 For a private development installation, enable USB debugging and use Android SDK platform-tools:
 
 ```sh

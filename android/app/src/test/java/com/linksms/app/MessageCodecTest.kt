@@ -21,4 +21,13 @@ class MessageCodecTest {
   assertEquals("123456", MessageCodec.otp("Your verification code is 123456"))
   assertNull(MessageCodec.otp("Flight 123456 has arrived"))
  }
+ @Test fun matchesSharedWebOtpCases() {
+  // Same fixture as tests/crypto.test.mjs, so Android and web pick the same code.
+  val cases = org.json.JSONArray(java.io.File("../../tests/otp-cases.json").readText())
+  for (i in 0 until cases.length()) {
+   val case = cases.getJSONObject(i)
+   val expected = if (case.isNull("otp")) null else case.getString("otp")
+   assertEquals(case.getString("body"), expected, MessageCodec.otp(case.getString("body")))
+  }
+ }
 }

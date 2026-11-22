@@ -47,8 +47,25 @@ export async function decryptMessage(key, record, uid) {
   );
   return JSON.parse(new TextDecoder().decode(clear));
 }
+// Keep these patterns identical to MessageCodec in the Android app (tests/otp-cases.json covers both).
+const OTP_KEYWORD = /otp|code|verification|one.time|password/gi;
+const OTP_CANDIDATE = /(?<![\p{L}\p{N}_.,])(?:\d{3}[- ]\d{3}|\d{4,8})(?![\p{L}\p{N}_]|[.,]\d)/gu;
+const AMOUNT_PREFIX = /(?:rs\.?|inr|usd|eur|gbp|[₹$€£])\s*$/i;
+/** Returns the 4–8 digit code nearest a code keyword, preferring one that follows it; skips amounts. */
 export function extractOtp(body) {
-  return /(?:otp|code|verification|one.time|password)/i.test(body)
-    ? (body.match(/\b\d{4,8}\b/)?.[0] ?? null)
-    : null;
+  if (!body) return null;
+  const keywords = [...body.matchAll(OTP_KEYWORD)];
+  if (!keywords.length) return null;
+  let best = null,
+    bestScore = Infinity;
+  for (const c of body.matchAll(OTP_CANDIDATE)) {
+    if (AMOUNT_PREFIX.test(body.slice(Math.max(0, c.index - 5), c.index))) continue;
+    const end = c.index + c[0].length;
+    for (const k of keywords) {
+      const kEnd = k.index + k[0].length;
+      const score = c.index >= kEnd ? c.index - kEnd : k.index >= end ? (k.index - end) * 2 : Infinity;
+      if (score < bestScore) [best, bestScore] = [c[0], score];
+    }
+  }
+  return best?.replace(/[- ]/g, "") ?? null;
 }

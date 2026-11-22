@@ -16,6 +16,8 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
 import org.json.JSONObject
 import java.security.KeyStore
@@ -92,6 +94,11 @@ class SmsReceiver : BroadcastReceiver() {
   val settings = Settings(context)
   if(!settings.enabled) return
   val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+  // Keystore unwrap, encryption and SQLite run off the main thread; goAsync keeps the broadcast alive meanwhile.
+  val pending = goAsync()
+  Thread { try { capture(context, intent, settings, uid) } finally { pending.finish() } }.start()
+ }
+ private fun capture(context: Context, intent: Intent, settings: Settings, uid: String) {
   try {
    val key = settings.key() ?: return
    val parts = Telephony.Sms.Intents.getMessagesFromIntent(intent)
@@ -127,7 +134,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
   try {
    val db = FirebaseFirestore.getInstance()
    val device = db.document("users/$uid/devices/${settings.deviceId}")
-   val state = device.get(com.google.firebase.firestore.Source.SERVER).await()
+   val state = device.get(Source.SERVER).await()
    if(state.getBoolean("enabled") != true) { settings.status = "Uploads paused in web inbox"; return Result.success() }
    device.update("lastSeen", FieldValue.serverTimestamp()).await()
    Queue(applicationContext).use { queue ->
@@ -136,8 +143,12 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
      for((id, json) in batch) {
       if(!settings.enabled || FirebaseAuth.getInstance().currentUser?.uid != uid) return Result.success()
       val doc = db.document("users/$uid/messages/$id")
-      if(!doc.get(com.google.firebase.firestore.Source.SERVER).await().exists()) {
+      // One round trip in the normal case. Rules deny overwriting, so a denied write means it was
+      // already uploaded (retry after a lost response) or the device was paused meanwhile.
+      try {
        doc.set(mapOf("deviceId" to json.getString("deviceId"), "iv" to json.getString("iv"), "ciphertext" to json.getString("ciphertext"), "version" to 1, "receivedAt" to json.getLong("receivedAt"), "uploadedAt" to FieldValue.serverTimestamp())).await()
+      } catch (denied: FirebaseFirestoreException) {
+       if (denied.code != FirebaseFirestoreException.Code.PERMISSION_DENIED || !doc.get(Source.SERVER).await().exists()) throw denied
       }
       queue.remove(id)
      }

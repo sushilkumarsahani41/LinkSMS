@@ -47,3 +47,8 @@ test("invalid keys fail and OTP extraction does not copy ordinary numbers", asyn
   assert.equal(extractOtp("Your verification code is 482913."), "482913");
   assert.equal(extractOtp("Flight 482913 is ready."), null);
 });
+test("OTP extraction picks the code near its keyword, not amounts or other numbers", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const cases = JSON.parse(await readFile(new URL("./otp-cases.json", import.meta.url), "utf8"));
+  for (const { body, otp } of cases) assert.equal(extractOtp(body), otp, body);
+});
